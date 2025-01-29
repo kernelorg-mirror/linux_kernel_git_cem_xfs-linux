@@ -101,8 +101,9 @@ xlog_cil_ctx_alloc(void)
 	struct xfs_cil_ctx	*ctx;
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL | __GFP_NOFAIL);
+
+	ctx->busy_extents = xfs_busy_extents_alloc(GFP_KERNEL | __GFP_NOFAIL);
 	INIT_LIST_HEAD(&ctx->committing);
-	INIT_LIST_HEAD(&ctx->busy_extents.extent_list);
 	INIT_LIST_HEAD(&ctx->log_items);
 	INIT_LIST_HEAD(&ctx->lv_chain);
 	INIT_WORK(&ctx->push_work, xlog_cil_push_work);
@@ -131,7 +132,7 @@ xlog_cil_push_pcp_aggregate(
 
 		if (!list_empty(&cilpcp->busy_extents)) {
 			list_splice_init(&cilpcp->busy_extents,
-					&ctx->busy_extents.extent_list);
+					&ctx->busy_extents->extent_list);
 		}
 		if (!list_empty(&cilpcp->log_items))
 			list_splice_init(&cilpcp->log_items, &ctx->log_items);
@@ -903,8 +904,8 @@ xlog_cil_committed(
 
 	xlog_cil_ail_insert(ctx, abort);
 
-	xfs_extent_busy_sort(&ctx->busy_extents.extent_list);
-	xfs_extent_busy_clear(&ctx->busy_extents.extent_list,
+	xfs_extent_busy_sort(&ctx->busy_extents->extent_list);
+	xfs_extent_busy_clear(&ctx->busy_extents->extent_list,
 			      xfs_has_discard(mp) && !abort);
 
 	spin_lock(&ctx->cil->xc_push_lock);
@@ -913,12 +914,13 @@ xlog_cil_committed(
 
 	xlog_cil_free_logvec(&ctx->lv_chain);
 
-	if (!list_empty(&ctx->busy_extents.extent_list)) {
-		ctx->busy_extents.owner = ctx;
-		xfs_discard_extents(mp, &ctx->busy_extents);
+	if (!list_empty(&ctx->busy_extents->extent_list)) {
+		ctx->busy_extents->owner = ctx;
+		xfs_discard_extents(mp, ctx->busy_extents);
 		return;
 	}
 
+	kfree(ctx->busy_extents);
 	kfree(ctx);
 }
 
