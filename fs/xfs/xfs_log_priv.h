@@ -217,7 +217,7 @@ typedef struct xlog_in_core {
  */
 struct xfs_cil;
 
-struct xfs_cil_ctx {
+struct xlog_chkpt {
 	struct xfs_cil		*cil;
 	xfs_csn_t		sequence;	/* chkpt sequence # */
 	xfs_lsn_t		start_lsn;	/* first LSN of chkpt commit */
@@ -273,7 +273,7 @@ struct xfs_cil {
 	struct workqueue_struct	*xc_push_wq;
 
 	struct rw_semaphore	xc_ctx_lock ____cacheline_aligned_in_smp;
-	struct xfs_cil_ctx	*xc_ctx;
+	struct xlog_chkpt	*xc_ctx;
 
 	spinlock_t		xc_push_lock ____cacheline_aligned_in_smp;
 	xfs_csn_t		xc_push_seq;
@@ -508,7 +508,7 @@ struct xlog_ticket *xlog_ticket_alloc(struct xlog *log, int unit_bytes,
 
 void	xlog_print_tic_res(struct xfs_mount *mp, struct xlog_ticket *ticket);
 void	xlog_print_trans(struct xfs_trans *);
-int	xlog_write(struct xlog *log, struct xfs_cil_ctx *ctx,
+int	xlog_write(struct xlog *log, struct xlog_chkpt *ctx,
 		struct list_head *lv_chain, struct xlog_ticket *tic,
 		uint32_t len);
 void	xfs_log_ticket_ungrant(struct xlog *log, struct xlog_ticket *ticket);
@@ -553,7 +553,7 @@ void	xlog_cil_destroy(struct xlog *log);
 bool	xlog_cil_empty(struct xlog *log);
 void	xlog_cil_commit(struct xlog *log, struct xfs_trans *tp,
 			xfs_csn_t *commit_seq, bool regrant);
-void	xlog_cil_set_ctx_write_state(struct xfs_cil_ctx *ctx,
+void	xlog_cil_set_ctx_write_state(struct xlog_chkpt *ctx,
 			struct xlog_in_core *iclog);
 
 
