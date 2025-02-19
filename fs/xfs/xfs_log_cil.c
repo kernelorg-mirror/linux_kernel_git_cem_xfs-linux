@@ -95,10 +95,10 @@ xfs_log_item_in_current_chkpt(
  */
 static void xlog_cil_push_work(struct work_struct *work);
 
-static struct xfs_cil_ctx *
+static struct xlog_chkpt *
 xlog_cil_ctx_alloc(void)
 {
-	struct xfs_cil_ctx	*ctx;
+	struct xlog_chkpt	*ctx;
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL | __GFP_NOFAIL);
 
@@ -120,7 +120,7 @@ xlog_cil_ctx_alloc(void)
 static void
 xlog_cil_push_pcp_aggregate(
 	struct xfs_cil		*cil,
-	struct xfs_cil_ctx	*ctx)
+	struct xlog_chkpt	*ctx)
 {
 	struct xlog_cil_pcp	*cilpcp;
 	int			cpu;
@@ -156,7 +156,7 @@ xlog_cil_push_pcp_aggregate(
 static void
 xlog_cil_insert_pcp_aggregate(
 	struct xfs_cil		*cil,
-	struct xfs_cil_ctx	*ctx)
+	struct xlog_chkpt	*ctx)
 {
 	int			cpu;
 	int			count = 0;
@@ -182,7 +182,7 @@ xlog_cil_insert_pcp_aggregate(
 static void
 xlog_cil_ctx_switch(
 	struct xfs_cil		*cil,
-	struct xfs_cil_ctx	*ctx)
+	struct xlog_chkpt	*ctx)
 {
 	xlog_cil_set_iclog_hdr_count(cil);
 	set_bit(XLOG_CIL_EMPTY, &cil->xc_flags);
@@ -549,7 +549,7 @@ xlog_cil_insert_items(
 	uint32_t		released_space)
 {
 	struct xfs_cil		*cil = log->l_cilp;
-	struct xfs_cil_ctx	*ctx = cil->xc_ctx;
+	struct xlog_chkpt	*ctx = cil->xc_ctx;
 	struct xfs_log_item	*lip;
 	int			len = 0;
 	int			iovhdr_res = 0, split_res = 0, ctx_res = 0;
@@ -752,7 +752,7 @@ xlog_cil_ail_insert_batch(
  */
 static void
 xlog_cil_ail_insert(
-	struct xfs_cil_ctx	*ctx,
+	struct xlog_chkpt	*ctx,
 	bool			aborted)
 {
 #define LOG_ITEM_BATCH_SIZE	32
@@ -884,7 +884,7 @@ xlog_cil_free_logvec(
  */
 static void
 xlog_cil_committed(
-	struct xfs_cil_ctx	*ctx)
+	struct xlog_chkpt	*ctx)
 {
 	struct xfs_mount	*mp = ctx->cil->xc_log->l_mp;
 	bool			abort = xlog_is_shutdown(ctx->cil->xc_log);
@@ -933,10 +933,10 @@ void
 xlog_cil_process_committed(
 	struct list_head	*list)
 {
-	struct xfs_cil_ctx	*ctx;
+	struct xlog_chkpt	*ctx;
 
 	while ((ctx = list_first_entry_or_null(list,
-			struct xfs_cil_ctx, iclog_entry))) {
+			struct xlog_chkpt, iclog_entry))) {
 		list_del(&ctx->iclog_entry);
 		xlog_cil_committed(ctx);
 	}
@@ -950,7 +950,7 @@ xlog_cil_process_committed(
 */
 void
 xlog_cil_set_ctx_write_state(
-	struct xfs_cil_ctx	*ctx,
+	struct xlog_chkpt	*ctx,
 	struct xlog_in_core	*iclog)
 {
 	struct xfs_cil		*cil = ctx->cil;
@@ -1029,7 +1029,7 @@ xlog_cil_order_write(
 	xfs_csn_t		sequence,
 	enum _record_type	record)
 {
-	struct xfs_cil_ctx	*ctx;
+	struct xlog_chkpt	*ctx;
 
 restart:
 	spin_lock(&cil->xc_push_lock);
@@ -1079,7 +1079,7 @@ restart:
  */
 static int
 xlog_cil_write_chain(
-	struct xfs_cil_ctx	*ctx,
+	struct xlog_chkpt	*ctx,
 	uint32_t		chain_len)
 {
 	struct xlog		*log = ctx->cil->xc_log;
@@ -1099,7 +1099,7 @@ xlog_cil_write_chain(
  */
 static int
 xlog_cil_write_commit_record(
-	struct xfs_cil_ctx	*ctx)
+	struct xlog_chkpt	*ctx)
 {
 	struct xlog		*log = ctx->cil->xc_log;
 	struct xlog_op_header	ophdr = {
@@ -1155,7 +1155,7 @@ struct xlog_cil_trans_hdr {
  */
 static void
 xlog_cil_build_trans_hdr(
-	struct xfs_cil_ctx	*ctx,
+	struct xlog_chkpt	*ctx,
 	struct xlog_cil_trans_hdr *hdr,
 	struct xfs_log_vec	*lvhdr,
 	int			num_iovecs)
@@ -1230,7 +1230,7 @@ xlog_cil_order_cmp(
  */
 static void
 xlog_cil_build_lv_chain(
-	struct xfs_cil_ctx	*ctx,
+	struct xlog_chkpt	*ctx,
 	struct list_head	*whiteouts,
 	uint32_t		*num_iovecs,
 	uint32_t		*num_bytes)
@@ -1301,11 +1301,11 @@ xlog_cil_push_work(
 	struct work_struct	*work)
 {
 	unsigned int		nofs_flags = memalloc_nofs_save();
-	struct xfs_cil_ctx	*ctx =
-		container_of(work, struct xfs_cil_ctx, push_work);
+	struct xlog_chkpt	*ctx =
+		container_of(work, struct xlog_chkpt, push_work);
 	struct xfs_cil		*cil = ctx->cil;
 	struct xlog		*log = cil->xc_log;
-	struct xfs_cil_ctx	*new_ctx;
+	struct xlog_chkpt	*new_ctx;
 	int			num_iovecs = 0;
 	int			num_bytes = 0;
 	int			error = 0;
@@ -1835,7 +1835,7 @@ xlog_cil_force_seq(
 	xfs_csn_t	sequence)
 {
 	struct xfs_cil		*cil = log->l_cilp;
-	struct xfs_cil_ctx	*ctx;
+	struct xlog_chkpt	*ctx;
 	xfs_lsn_t		commit_lsn = NULLCOMMITLSN;
 
 	ASSERT(sequence <= cil->xc_current_sequence);
@@ -1928,7 +1928,7 @@ xlog_cil_init(
 	struct xlog		*log)
 {
 	struct xfs_cil		*cil;
-	struct xfs_cil_ctx	*ctx;
+	struct xlog_chkpt	*ctx;
 	struct xlog_cil_pcp	*cilpcp;
 	int			cpu;
 
