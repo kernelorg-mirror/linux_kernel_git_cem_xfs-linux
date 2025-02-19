@@ -2235,7 +2235,7 @@ xlog_write_partial(
 int
 xlog_write(
 	struct xlog		*log,
-	struct xfs_cil_ctx	*ctx,
+	struct xlog_chkpt	*ctx,
 	struct list_head	*lv_chain,
 	struct xlog_ticket	*ticket,
 	uint32_t		len)

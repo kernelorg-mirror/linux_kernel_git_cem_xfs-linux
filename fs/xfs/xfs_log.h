@@ -6,7 +6,7 @@
 #ifndef	__XFS_LOG_H__
 #define __XFS_LOG_H__
 
-struct xfs_cil_ctx;
+struct xlog_chkpt;
 
 struct xfs_log_vec {
 	struct list_head	lv_list;	/* CIL lv chain ptrs */
