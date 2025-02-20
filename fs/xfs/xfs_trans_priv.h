@@ -12,6 +12,7 @@ struct xfs_mount;
 struct xfs_trans;
 struct xfs_ail;
 struct xfs_log_vec;
+struct xlog_chkpt;
 
 
 void	xfs_trans_init(struct xfs_mount *);
@@ -73,6 +74,7 @@ void	xfs_trans_ail_update_bulk(struct xfs_ail *ailp,
 				struct xfs_ail_cursor *cur,
 				struct xfs_log_item **log_items, int nr_items,
 				xfs_lsn_t lsn) __releases(ailp->ail_lock);
+
 /*
  * Return a pointer to the first item in the AIL.  If the AIL is empty, then
  * return NULL.
@@ -101,6 +103,9 @@ xfs_lsn_t xfs_ail_delete_one(struct xfs_ail *ailp, struct xfs_log_item *lip);
 void xfs_ail_update_finish(struct xfs_ail *ailp, xfs_lsn_t old_lsn)
 			__releases(ailp->ail_lock);
 void xfs_trans_ail_delete(struct xfs_log_item *lip, int shutdown_type);
+
+/* Move the checkpoint context into the AIL code */
+void xfs_trans_ail_chkpt_transfer(struct xlog_chkpt *chkpt, bool aborted);
 
 static inline void xfs_ail_push(struct xfs_ail *ailp)
 {

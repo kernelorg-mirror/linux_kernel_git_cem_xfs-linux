@@ -863,6 +863,178 @@ xfs_trans_ail_insert(
 	xfs_trans_ail_update_bulk(ailp, NULL, &lip, 1, lsn);
 }
 
+static inline void
+xfs_trans_ail_insert_batch(
+	struct xfs_ail		*ailp,
+	struct xfs_ail_cursor	*cur,
+	struct xfs_log_item	**log_items,
+	int			nr_items,
+	xfs_lsn_t		commit_lsn)
+{
+	int	i;
+
+	spin_lock(&ailp->ail_lock);
+	xfs_trans_ail_update_bulk(ailp, cur, log_items, nr_items, commit_lsn);
+
+	for (i = 0; i < nr_items; i++) {
+		struct xfs_log_item *lip = log_items[i];
+
+		if (lip->li_ops->iop_unpin)
+			lip->li_ops->iop_unpin(lip, 0);
+	}
+}
+
+/*
+ * Take the checkpoint's context from CIL and transfer the log items
+ * (linked through their log vectors) to the AIL.
+ *
+ * Once it's called, the checkpoint context can't be access by the CIL
+ * anymore.
+ *
+ * This uses bulk insertion techniques to minimise AIL lock traffic.
+ *
+ * The AIL tracks log items via the start record LSN of the checkpoint,
+ * not the commit record LSN. This is because we can pipeline multiple
+ * checkpoints, and so the start record of checkpoint N+1 can be written
+ * before the commit record of checkpoint N. i.e:
+ *
+ *   start N                   commit N
+ *     +-------------+------------+----------------+
+ *               start N+1                     commit N+1
+ *
+ * The tail of the log cannot be moved to the LSN of commit N when all
+ * the items of that checkpoint are written back, because then, the
+ * start record for N+1 is no longer in the active portion of the log
+ * and recovery will fail/corrupt the filesystem.
+ *
+ * Hence when all the log items in checkpoint N are written back, the
+ * tail of the log must now only move as far forwards as the start LSN
+ * of checkpoint N+1.
+ *
+ * If we are called with the aborted flag set, it is because a log write during
+ * a CIL checkpoint commit has failed. In this case, all the items in the
+ * checkpoint have already gone through iop_committed and iop_committing, which
+ * means that checkpoint commit abort handling is treated exactly the same as an
+ * iclog write error, even though we haven't started any IO yet. Hence in this
+ * case, all we need to do is iop_committed processing, followed by an
+ * iop_unpin(aborted) call.
+ *
+ * The AIL cursor is used to optimise the insert process. If commit_lsn is not
+ * at the end of the AIL, the insert cursor avoids the need to walk the AIL to
+ * find the insertion point on every xfs_trans_ail_insert_batch() call. This
+ * saves a lot of needless list walking and is a net win, even though it
+ * slightly increases the amount of AIL lock traffic to set it up and tear it
+ * down.
+ */
+void
+xfs_trans_ail_chkpt_transfer(
+	struct xlog_chkpt	*chkpt,
+	bool			aborted)
+{
+# define LOG_ITEM_BATCH_SIZE	32
+	struct xfs_ail		*ailp = chkpt->cil->xc_log->l_ailp;
+	struct xfs_log_item	*log_items[LOG_ITEM_BATCH_SIZE];
+	struct xfs_log_vec	*lv;
+	struct xfs_ail_cursor	cur;
+	xfs_lsn_t		old_head;
+	int			i = 0;
+
+	ASSERT(XFS_LSN_CMP(chkpt->commit_lsn, ailp->ail_head_lsn) >= 0 ||
+			   aborted);
+
+	spin_lock(&ailp->ail_lock);
+	xfs_trans_ail_cursor_last(ailp, &cur, chkpt->start_lsn);
+	old_head = ailp->ail_head_lsn;
+	ailp->ail_head_lsn = chkpt->commit_lsn;
+
+	/* xfs_ail_update_finish() dropts the ail_lock */
+	xfs_ail_update_finish(ailp, NULLCOMMITLSN);
+
+	/* XXX: If we are returning the space here, where we took it? */
+	smp_wmb();	/* paired with smp_rmb in xlog_grant_space_left */
+	xlog_grant_return_space(ailp->ail_log, old_head, ailp->ail_head_lsn);
+
+	/* unpin all the log items with log vectors in this checkpoint */
+	list_for_each_entry(lv, &chkpt->lv_chain, lv_list) {
+		struct xfs_log_item	*lip = lv->lv_item;
+		xfs_lsn_t		item_lsn;
+
+		if (aborted)
+			set_bit(XFS_LI_ABORTED, &lip->li_flags);
+
+		if (lip->li_ops->flags & XFS_ITEM_RELEASE_WHEN_COMMITTED) {
+			lip->li_ops->iop_release(lip);
+			continue;
+		}
+
+		if (lip->li_ops->iop_committed)
+			item_lsn = lip->li_ops->iop_committed(lip,
+					      chkpt->start_lsn);
+		else
+			item_lsn = chkpt->start_lsn;
+
+		if (XFS_LSN_CMP(item_lsn, (xfs_lsn_t)-1) == 0)
+		    continue;
+
+		if (aborted) {
+			ASSERT(xlog_is_shutdown(ailp->ail_log));
+			if (lip->li_ops->iop_unpin)
+				lip->li_ops->iop_unpin(lip, 1);
+			continue;
+		}
+
+		if (item_lsn != chkpt->start_lsn) {
+			spin_lock(&ailp->ail_lock);
+			if (XFS_LSN_CMP(item_lsn, lip->li_lsn) > 0)
+				xfs_trans_ail_update(ailp, lip, item_lsn);
+			else
+				spin_unlock(&ailp->ail_lock);
+
+			if (lip->li_ops->iop_unpin)
+				lip->li_ops->iop_unpin(lip, 0);
+
+			continue;
+		}
+
+		log_items[i++] = lv->lv_item;
+		if (i >= LOG_ITEM_BATCH_SIZE) {
+			xfs_trans_ail_insert_batch(ailp, &cur, log_items,
+					LOG_ITEM_BATCH_SIZE, chkpt->start_lsn);
+			i = 0;
+		}
+	}
+
+	if (i)
+		xfs_trans_ail_insert_batch(ailp, &cur, log_items, i,
+				chkpt->start_lsn);
+
+	spin_lock(&ailp->ail_lock);
+	xfs_trans_ail_cursor_done(&cur);
+	spin_unlock(&ailp->ail_lock);
+
+	/*
+	 * We are done with the checkpoint context, clean up the lv_chain.
+	 *
+	 * This opencode the old xlog_cil_free_logvec()
+	 *
+	 * Reusing lv pointer here as has no usage anymore, instead of
+	 * defining a new pointer just for it
+	 *
+	 * XXX: We are freeing the log vector here, is this safe? Don't AIL code
+	 *	uses it to push the item to the log?
+	 */
+
+	while (!list_empty(&chkpt->lv_chain)) {
+	       lv = list_first_entry(&chkpt->lv_chain, struct xfs_log_vec,
+				lv_list);
+
+		list_del_init(&lv->lv_list);
+		kvfree(lv);
+	}
+
+	kfree(chkpt);
+}
+
 /*
  * Delete one log item from the AIL.
  *
