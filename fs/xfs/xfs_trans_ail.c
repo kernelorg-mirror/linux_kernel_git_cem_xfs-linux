@@ -74,6 +74,31 @@ xfs_ail_check(
 #endif /* DEBUG */
 
 /*
+ * Return a pointer to the first item in the AIL.  If the AIL is empty, then
+ * return NULL.
+ */
+static inline struct xfs_log_item *
+xfs_ail_min(
+	struct xfs_ail  *ailp)
+{
+	struct xlog_chkpt *ctx = NULL;
+
+	if (list_empty(&ailp->ail_head))
+		return NULL;
+
+	list_for_each_entry(ctx, &ailp->ail_head, ail_link) {
+		if (list_empty(&ctx->ail_items))
+			continue;
+
+		return list_first_entry_or_null(&ctx->ail_items,
+						struct xfs_log_item,
+						li_ail);
+	}
+
+	return NULL;
+}
+
+/*
  * Return a pointer to the last item in the AIL.  If the AIL is empty, then
  * return NULL.
  */
@@ -81,23 +106,54 @@ static struct xfs_log_item *
 xfs_ail_max(
 	struct xfs_ail  *ailp)
 {
+
+	struct xlog_chkpt	*ctx;
+	struct xfs_log_item	*lip = NULL;
+
 	if (list_empty(&ailp->ail_head))
 		return NULL;
 
-	return list_entry(ailp->ail_head.prev, struct xfs_log_item, li_ail);
+	/*
+	 * Search for the last item added to the ail, but take into
+	 * consideration the very last context might be empty.
+	 */
+	list_for_each_entry_reverse(ctx, &ailp->ail_head, ail_link) {
+		if (list_empty(&ctx->ail_items))
+			continue;
+
+		lip = list_last_entry(&ctx->ail_items,
+				      struct xfs_log_item, li_ail);
+	}
+
+	return lip;
 }
 
 /*
  * Return a pointer to the item which follows the given item in the AIL.  If
  * the given item is the last item in the list, then return NULL.
+ *
+ * Note we are dealing with two ordered lists here, the ail contexts list
+ * and the items list within each context.
+ * We need to search for the existence of both the next item in the
+ * current context and a possible next item on the next context.
  */
 static struct xfs_log_item *
 xfs_ail_next(
 	struct xfs_ail		*ailp,
 	struct xfs_log_item	*lip)
 {
-	if (lip->li_ail.next == &ailp->ail_head)
-		return NULL;
+	struct xlog_chkpt	*ctx = lip->li_ctx;
+
+	if (lip->li_ail.next == &ctx->ail_items) {
+		if (ctx->ail_link.next == &ailp->ail_head) {
+			return NULL;
+		} else {
+			ctx = list_first_entry(&ctx->ail_link, struct xlog_chkpt,
+					       ail_link);
+			return list_first_entry(&ctx->ail_items, struct xfs_log_item,
+						li_ail);
+		}
+	}
 
 	return list_first_entry(&lip->li_ail, struct xfs_log_item, li_ail);
 }
@@ -240,11 +296,15 @@ __xfs_trans_ail_cursor_last(
 	struct xfs_ail		*ailp,
 	xfs_lsn_t		lsn)
 {
+	struct xlog_chkpt	*ctx;
 	struct xfs_log_item	*lip;
 
-	list_for_each_entry_reverse(lip, &ailp->ail_head, li_ail) {
-		if (XFS_LSN_CMP(lip->li_lsn, lsn) <= 0)
-			return lip;
+	list_for_each_entry_reverse(ctx, &ailp->ail_head, ail_link) {
+		/* XXX: Can I assume we'll have a context here? */
+		list_for_each_entry_reverse(lip, &ctx->ail_items, li_ail) {
+			if (XFS_LSN_CMP(lip->li_lsn, lsn) <= 0)
+				return lip;
+		}
 	}
 	return NULL;
 }
@@ -275,6 +335,7 @@ xfs_trans_ail_cursor_last(
 static void
 xfs_ail_splice(
 	struct xfs_ail		*ailp,
+	struct xlog_chkpt	*ctx,
 	struct xfs_ail_cursor	*cur,
 	struct list_head	*list,
 	xfs_lsn_t		lsn)
@@ -306,12 +367,14 @@ xfs_ail_splice(
 	 * Finally perform the splice.  Unless the AIL was empty,
 	 * lip points to the item in the AIL _after_ which the new
 	 * items should go.  If lip is null the AIL was empty, so
-	 * the new items go at the head of the AIL.
+	 * the new items go at the head of the new checkpoint context.
 	 */
-	if (lip)
-		list_splice(list, &lip->li_ail);
-	else
-		list_splice(list, &ailp->ail_head);
+
+	/*
+	 * Whether the context is empty or not, we can splice straight to
+	 * the ctx tail
+	 */
+	list_splice_tail(list, &ctx->ail_items);
 }
 
 /*
@@ -322,8 +385,16 @@ xfs_ail_delete(
 	struct xfs_ail		*ailp,
 	struct xfs_log_item	*lip)
 {
+	struct xlog_chkpt	*ctx = lip->li_ctx;
+
 	xfs_ail_check(ailp, lip);
 	list_del(&lip->li_ail);
+	lip->li_ctx = NULL;
+
+	if (list_empty(&ctx->ail_items)) {
+		list_del(&ctx->ail_link);
+		kfree(ctx);
+	}
 	xfs_trans_ail_cursor_clear(ailp, lip);
 }
 
@@ -801,6 +872,7 @@ xfs_ail_update_finish(
 void
 xfs_trans_ail_update_bulk(
 	struct xfs_ail		*ailp,
+	struct xlog_chkpt	*ctx,
 	struct xfs_ail_cursor	*cur,
 	struct xfs_log_item	**log_items,
 	int			nr_items,
@@ -810,6 +882,14 @@ xfs_trans_ail_update_bulk(
 	xfs_lsn_t		tail_lsn = 0;
 	int			i;
 	LIST_HEAD(tmp);
+
+	/*
+	 * FIXME: Only caller with a NULL ctx for now, is the recovery
+	 * code. Just ignore it as I'm not interested in recovery
+	 * code for now
+	 */
+	if (!ctx)
+		return;
 
 	ASSERT(nr_items > 0);		/* Not required, but true. */
 	mlip = xfs_ail_min(ailp);
@@ -830,11 +910,12 @@ xfs_trans_ail_update_bulk(
 			trace_xfs_ail_insert(lip, 0, lsn);
 		}
 		lip->li_lsn = lsn;
+		lip->li_ctx = ctx;
 		list_add_tail(&lip->li_ail, &tmp);
 	}
 
 	if (!list_empty(&tmp))
-		xfs_ail_splice(ailp, cur, &tmp, lsn);
+		xfs_ail_splice(ailp, ctx, cur, &tmp, lsn);
 
 	/*
 	 * If this is the first insert, wake up the push daemon so it can
@@ -860,7 +941,9 @@ xfs_trans_ail_insert(
 	xfs_lsn_t		lsn)
 {
 	spin_lock(&ailp->ail_lock);
-	xfs_trans_ail_update_bulk(ailp, NULL, &lip, 1, lsn);
+
+	/* This comes from log recovery, we should create its own context */
+	xfs_trans_ail_update_bulk(ailp, NULL, NULL, &lip, 1, lsn);
 }
 
 /*

@@ -228,6 +228,8 @@ struct xlog_chkpt {
 	struct xfs_busy_extents	*busy_extents;
 	struct list_head	log_items;	/* log items in chkpt */
 	struct list_head	lv_chain;	/* logvecs being pushed */
+	struct list_head	ail_items;	/* ctx items in AIL */
+	struct list_head	ail_link;	/* Link to AIL head */
 	struct list_head	iclog_entry;
 	struct list_head	committing;	/* ctx committing list */
 	struct work_struct	push_work;
