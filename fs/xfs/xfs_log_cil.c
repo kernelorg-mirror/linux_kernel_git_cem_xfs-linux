@@ -888,6 +888,16 @@ xlog_cil_committed(
 {
 	struct xfs_mount	*mp = ctx->cil->xc_log->l_mp;
 	bool			abort = xlog_is_shutdown(ctx->cil->xc_log);
+	struct xfs_busy_extents *extents = ctx->busy_extents;
+
+
+	/*
+	 * XXX: Nothing else should be referencing ctx->busy_extents.
+	 *	Poison the list pointer here for testing purposes.
+	 *
+	 *	This comment and the poison below shall be removed.
+	 */
+	ctx->busy_extents = (void *)0xDEADBEEF;
 
 	/*
 	 * If the I/O failed, we're aborting the commit and already shutdown.
@@ -905,8 +915,8 @@ xlog_cil_committed(
 
 	xlog_cil_ail_insert(ctx, abort);
 
-	xfs_extent_busy_sort(&ctx->busy_extents->extent_list);
-	xfs_extent_busy_clear(&ctx->busy_extents->extent_list,
+	xfs_extent_busy_sort(&extents->extent_list);
+	xfs_extent_busy_clear(&extents->extent_list,
 			      xfs_has_discard(mp) && !abort);
 
 	spin_lock(&ctx->cil->xc_push_lock);
@@ -915,13 +925,7 @@ xlog_cil_committed(
 
 	xlog_cil_free_logvec(&ctx->lv_chain);
 
-	if (!list_empty(&ctx->busy_extents->extent_list)) {
-		ctx->busy_extents->owner = ctx;
-		xfs_discard_extents(mp, ctx->busy_extents);
-		return;
-	}
-
-	xfs_busy_extents_free(ctx->busy_extents);
+	xfs_discard_extents(mp, extents);
 	kfree(ctx);
 }
 
