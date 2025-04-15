@@ -107,6 +107,8 @@ xlog_cil_ctx_alloc(void)
 	INIT_LIST_HEAD(&ctx->committing);
 	INIT_LIST_HEAD(&ctx->log_items);
 	INIT_LIST_HEAD(&ctx->lv_chain);
+	INIT_LIST_HEAD(&ctx->ail_items);
+	INIT_LIST_HEAD(&ctx->ail_link);
 	INIT_WORK(&ctx->push_work, xlog_cil_push_work);
 	return ctx;
 }
@@ -693,6 +695,7 @@ xlog_cil_insert_items(
 static inline void
 xlog_cil_ail_insert_batch(
 	struct xfs_ail		*ailp,
+	struct xlog_chkpt	*ctx,
 	struct xfs_ail_cursor	*cur,
 	struct xfs_log_item	**log_items,
 	int			nr_items,
@@ -702,7 +705,7 @@ xlog_cil_ail_insert_batch(
 
 	spin_lock(&ailp->ail_lock);
 	/* xfs_trans_ail_update_bulk drops ailp->ail_lock */
-	xfs_trans_ail_update_bulk(ailp, cur, log_items, nr_items, commit_lsn);
+	xfs_trans_ail_update_bulk(ailp, ctx, cur, log_items, nr_items, commit_lsn);
 
 	for (i = 0; i < nr_items; i++) {
 		struct xfs_log_item *lip = log_items[i];
@@ -837,7 +840,7 @@ xlog_cil_ail_insert(
 			 */
 			spin_lock(&ailp->ail_lock);
 			if (XFS_LSN_CMP(item_lsn, lip->li_lsn) > 0)
-				xfs_trans_ail_update(ailp, lip, item_lsn);
+				xfs_trans_ail_update(ailp, ctx, lip, item_lsn);
 			else
 				spin_unlock(&ailp->ail_lock);
 			if (lip->li_ops->iop_unpin)
@@ -848,7 +851,7 @@ xlog_cil_ail_insert(
 		/* Item is a candidate for bulk AIL insert.  */
 		log_items[i++] = lv->lv_item;
 		if (i >= LOG_ITEM_BATCH_SIZE) {
-			xlog_cil_ail_insert_batch(ailp, &cur, log_items,
+			xlog_cil_ail_insert_batch(ailp, ctx, &cur, log_items,
 					LOG_ITEM_BATCH_SIZE, ctx->start_lsn);
 			i = 0;
 		}
@@ -856,11 +859,17 @@ xlog_cil_ail_insert(
 
 	/* make sure we insert the remainder! */
 	if (i)
-		xlog_cil_ail_insert_batch(ailp, &cur, log_items, i,
+		xlog_cil_ail_insert_batch(ailp, ctx, &cur, log_items, i,
 				ctx->start_lsn);
 
 	spin_lock(&ailp->ail_lock);
 	xfs_trans_ail_cursor_done(&cur);
+
+	/*
+	 * All items should be in ctx->ail_items by now, add it
+	 * to the ail
+	 */
+	list_add_tail(&ctx->ail_link, &ailp->ail_head);
 	spin_unlock(&ailp->ail_lock);
 }
 
@@ -924,9 +933,7 @@ xlog_cil_committed(
 	spin_unlock(&ctx->cil->xc_push_lock);
 
 	xlog_cil_free_logvec(&ctx->lv_chain);
-
 	xfs_discard_extents(mp, extents);
-	kfree(ctx);
 }
 
 void
