@@ -110,6 +110,7 @@ xlog_cil_ctx_alloc(void)
 	INIT_LIST_HEAD(&ctx->ail_items);
 	INIT_LIST_HEAD(&ctx->ail_link);
 	INIT_WORK(&ctx->push_work, xlog_cil_push_work);
+	ctx->pin = 0;
 	return ctx;
 }
 
@@ -779,6 +780,7 @@ xlog_cil_ail_insert(
 	ASSERT(XFS_LSN_CMP(ctx->commit_lsn, ailp->ail_head_lsn) >= 0 ||
 			aborted);
 	spin_lock(&ailp->ail_lock);
+	ctx->pin = 1;
 	xfs_trans_ail_cursor_last(ailp, &cur, ctx->start_lsn);
 	old_head = ailp->ail_head_lsn;
 	ailp->ail_head_lsn = ctx->commit_lsn;
@@ -870,6 +872,7 @@ xlog_cil_ail_insert(
 	 * to the ail
 	 */
 	list_add_tail(&ctx->ail_link, &ailp->ail_head);
+	ctx->pin = 0;
 	spin_unlock(&ailp->ail_lock);
 }
 

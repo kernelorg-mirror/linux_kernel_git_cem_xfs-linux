@@ -391,7 +391,7 @@ xfs_ail_delete(
 	list_del(&lip->li_ail);
 	lip->li_ctx = NULL;
 
-	if (list_empty(&ctx->ail_items)) {
+	if (list_empty(&ctx->ail_items) && !ctx->pin) {
 		list_del(&ctx->ail_link);
 		kfree(ctx);
 	}
