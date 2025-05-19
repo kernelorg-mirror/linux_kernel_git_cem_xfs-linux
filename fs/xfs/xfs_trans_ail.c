@@ -73,6 +73,22 @@ xfs_ail_check(
 #define	xfs_ail_check(a,l)
 #endif /* DEBUG */
 
+static void
+dump_ail(
+	 struct xfs_ail	*ailp)
+{
+	struct xlog_chkpt	*ctx;
+	struct xfs_log_item	*lip;
+
+	printk("DUMPING AIL:\n");
+	list_for_each_entry(ctx, &ailp->ail_head, ail_link) {
+		printk("CTX: %p\n", ctx);
+		list_for_each_entry(lip, &ctx->ail_items, li_ail) {
+			printk("\tI: %p\n", lip);
+		}
+	}
+}
+
 /*
  * Return a pointer to the first item in the AIL.  If the AIL is empty, then
  * return NULL.
@@ -144,18 +160,17 @@ xfs_ail_next(
 {
 	struct xlog_chkpt	*ctx = lip->li_ctx;
 
-	if (lip->li_ail.next == &ctx->ail_items) {
-		if (ctx->ail_link.next == &ailp->ail_head) {
-			return NULL;
-		} else {
-			ctx = list_first_entry(&ctx->ail_link, struct xlog_chkpt,
-					       ail_link);
-			return list_first_entry(&ctx->ail_items, struct xfs_log_item,
-						li_ail);
+	if (list_is_last(&lip->li_ail, &ctx->ail_items)) {
+		list_for_each_entry_continue(ctx, &ailp->ail_head, ail_link) {
+			if (list_empty(&ctx->ail_items))
+			    continue;
+
+			return list_first_entry(&ctx->ail_items,
+						struct xfs_log_item, li_ail);
 		}
 	}
 
-	return list_first_entry(&lip->li_ail, struct xfs_log_item, li_ail);
+	return NULL;
 }
 
 /*
@@ -271,6 +286,7 @@ xfs_trans_ail_cursor_first(
 	xfs_lsn_t		lsn)
 {
 	struct xfs_log_item	*lip;
+	struct xlog_chkpt	*ctx;
 
 	xfs_trans_ail_cursor_init(ailp, cur);
 
@@ -279,9 +295,17 @@ xfs_trans_ail_cursor_first(
 		goto out;
 	}
 
-	list_for_each_entry(lip, &ailp->ail_head, li_ail) {
-		if (XFS_LSN_CMP(lip->li_lsn, lsn) >= 0)
-			goto out;
+	if (list_empty(&ailp->ail_head))
+		return NULL;
+
+	list_for_each_entry(ctx, &ailp->ail_head, ail_link) {
+		if (list_empty(&ctx->ail_items))
+			continue;
+
+		list_for_each_entry(lip, &ctx->ail_items, li_ail) {
+			if (XFS_LSN_CMP(lip->li_lsn, lsn) >= 0)
+				goto out;
+		}
 	}
 	return NULL;
 
@@ -945,7 +969,8 @@ xfs_trans_ail_insert(
 	spin_lock(&ailp->ail_lock);
 
 	/* This comes from log recovery, we should create its own context */
-	xfs_trans_ail_update_bulk(ailp, NULL, NULL, &lip, 1, lsn);
+	xfs_trans_ail_update_bulk(ailp, ailp->ail_log->l_cilp->xc_ctx,
+				  NULL, &lip, 1, lsn);
 }
 
 /*
