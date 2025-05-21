@@ -111,6 +111,7 @@ xlog_cil_ctx_alloc(void)
 	INIT_LIST_HEAD(&ctx->ail_link);
 	INIT_WORK(&ctx->push_work, xlog_cil_push_work);
 	ctx->pin = 0;
+	ctx->i_count = 0;
 	return ctx;
 }
 
@@ -868,10 +869,18 @@ xlog_cil_ail_insert(
 	xfs_trans_ail_cursor_done(&cur);
 
 	/*
-	 * All items should be in ctx->ail_items by now, add it
-	 * to the ail
+	 * All items should be in ctx->ail_items by now, send the context
+	 * to the ail.
+	 * If by occasion there were no items added to the context, this
+	 * context's life came to an end and the caller should free it.
+	 *
+	 * We can't free the context directly here yet, so it should be freed
+	 * by xlog_cil_committed.
 	 */
-	list_add_tail(&ctx->ail_link, &ailp->ail_head);
+
+	if (!list_empty(&ctx->ail_items))
+		list_add_tail(&ctx->ail_link, &ailp->ail_head);
+
 	ctx->pin = 0;
 	spin_unlock(&ailp->ail_lock);
 }
@@ -937,6 +946,18 @@ xlog_cil_committed(
 
 	xlog_cil_free_logvec(&ctx->lv_chain);
 	xfs_discard_extents(mp, extents);
+
+	/* The context had no items added to it, free it.
+	 *
+	 * XXX: This is a hack to track if there were any items added to the
+	 *	context, and it should go away.
+	 *
+	 *	This is serialized by the ail_lock up until xlog_cil_ail_insert()
+	 *	and it is never decremented, so it should be safe by now to do an
+	 *	unlocked check.
+	 */
+	if (ctx->i_count == 0)
+		kfree(ctx);
 }
 
 void

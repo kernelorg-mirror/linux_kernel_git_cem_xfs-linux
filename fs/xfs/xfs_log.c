@@ -1316,6 +1316,23 @@ xlog_clear_incompat(
 	xfs_clear_incompat_log_features(mp);
 }
 
+static inline void
+dump_ail(
+	 struct xfs_mount *mp)
+{
+	struct xfs_ail		*ailp = mp->m_ail;
+	struct xlog_chkpt	*ctx;
+	struct xfs_log_item	*lip;
+
+	trace_printk("DUMPING AIL:\n");
+	list_for_each_entry(ctx, &ailp->ail_head, ail_link) {
+		trace_printk("CTX: %p COUNT: %u\n", ctx, ctx->i_count);
+		list_for_each_entry(lip, &ctx->ail_items, li_ail) {
+			trace_printk("\tI: %p\n", lip);
+		}
+	}
+}
+
 /*
  * Every sync period we need to unpin all items in the AIL and push them to
  * disk. If there is nothing dirty, then we might need to cover the log to

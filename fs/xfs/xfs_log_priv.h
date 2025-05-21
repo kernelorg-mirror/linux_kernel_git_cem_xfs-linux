@@ -226,6 +226,7 @@ struct xlog_chkpt {
 	struct xlog_ticket	*ticket;	/* chkpt ticket */
 	atomic_t		space_used;	/* aggregate size of regions */
 	unsigned int		pin;
+	unsigned int		i_count;
 	struct xfs_busy_extents	*busy_extents;
 	struct list_head	log_items;	/* log items in chkpt */
 	struct list_head	lv_chain;	/* logvecs being pushed */

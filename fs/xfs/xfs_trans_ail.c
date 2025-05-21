@@ -73,22 +73,6 @@ xfs_ail_check(
 #define	xfs_ail_check(a,l)
 #endif /* DEBUG */
 
-static void
-dump_ail(
-	 struct xfs_ail	*ailp)
-{
-	struct xlog_chkpt	*ctx;
-	struct xfs_log_item	*lip;
-
-	printk("DUMPING AIL:\n");
-	list_for_each_entry(ctx, &ailp->ail_head, ail_link) {
-		printk("CTX: %p\n", ctx);
-		list_for_each_entry(lip, &ctx->ail_items, li_ail) {
-			printk("\tI: %p\n", lip);
-		}
-	}
-}
-
 /*
  * Return a pointer to the first item in the AIL.  If the AIL is empty, then
  * return NULL.
@@ -415,9 +399,12 @@ xfs_ail_delete(
 	list_del(&lip->li_ail);
 	lip->li_ctx = NULL;
 
-	if (list_empty(&ctx->ail_items) && !ctx->pin) {
-		list_del(&ctx->ail_link);
-		kfree(ctx);
+	if (list_empty(&ctx->ail_items)) {
+		if (!ctx->pin) {
+			list_del(&ctx->ail_link);
+			kfree(ctx);
+		} else {
+		}
 	}
 	xfs_trans_ail_cursor_clear(ailp, lip);
 }
@@ -938,6 +925,7 @@ xfs_trans_ail_update_bulk(
 		lip->li_lsn = lsn;
 		lip->li_ctx = ctx;
 		list_add_tail(&lip->li_ail, &tmp);
+		ctx->i_count++;
 	}
 
 	if (!list_empty(&tmp))
