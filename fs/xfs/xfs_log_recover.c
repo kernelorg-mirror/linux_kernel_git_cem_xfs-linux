@@ -1999,8 +1999,10 @@ xlog_recover_items_pass2(
 	struct list_head                *item_list)
 {
 	struct xlog_recover_item	*item;
+	struct xlog_chkpt		*ctx = log->l_cilp->xc_ctx;
 	int				error = 0;
 
+	ctx->pin = 1;
 	list_for_each_entry(item, item_list, ri_list) {
 		trace_xfs_log_recover_item_recover(log, trans, item,
 				XLOG_RECOVER_PASS2);
@@ -2008,10 +2010,12 @@ xlog_recover_items_pass2(
 		if (item->ri_ops->commit_pass2)
 			error = item->ri_ops->commit_pass2(log, buffer_list,
 					item, trans->r_lsn);
-		if (error)
+		if (error) {
 			return error;
+			ctx->pin = 0;
+		}
 	}
-
+	ctx->pin = 0;
 	return error;
 }
 
