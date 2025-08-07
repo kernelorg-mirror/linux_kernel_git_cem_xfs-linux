@@ -41,6 +41,7 @@ struct xfs_log_item {
 
 	/* delayed logging */
 	struct list_head		li_cil;		/* CIL pointers */
+	struct xlog_chkpt		*li_ctx;	/* Chkpt ctx this item belongs to */
 	struct xfs_log_vec		*li_lv;		/* active log vector */
 	struct xfs_log_vec		*li_lv_shadow;	/* standby vector */
 	xfs_csn_t			li_seq;		/* CIL commit seq */

@@ -224,10 +224,16 @@ struct xlog_chkpt {
 	xfs_lsn_t		commit_lsn;	/* chkpt commit record lsn */
 	struct xlog_in_core	*commit_iclog;
 	struct xlog_ticket	*ticket;	/* chkpt ticket */
+	struct spinlock		ctx_ail_lock;
 	atomic_t		space_used;	/* aggregate size of regions */
+	unsigned int		pin;
+	unsigned int		i_count;
+	unsigned long		flags;
 	struct xfs_busy_extents	*busy_extents;
 	struct list_head	log_items;	/* log items in chkpt */
 	struct list_head	lv_chain;	/* logvecs being pushed */
+	struct list_head	ail_items;	/* items pushed to AIL */
+	struct list_head	ail_link;	/* Link to AIL head */
 	struct list_head	iclog_entry;
 	struct list_head	committing;	/* ctx committing list */
 	struct work_struct	push_work;
@@ -239,6 +245,10 @@ struct xlog_chkpt {
 	 */
 	struct cpumask		cil_pcpmask;
 };
+
+/* xlog_chkpt flags */
+#define XLOG_CHKPT_RECOVER	(1 << 0)
+#define XLOG_CHKPT_CAN_FREE	(1 << 1)
 
 /*
  * Per-cpu CIL tracking items
