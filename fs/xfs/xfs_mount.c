@@ -779,7 +779,7 @@ xfs_set_max_atomic_write_opt(
 		return -EINVAL;
 	}
 
-	if (xfs_has_reflink(mp))
+	if (xfs_has_reflink(mp) || xfs_has_zoned(mp))
 		goto set_limit;
 
 	if (new_max_fsbs == 1) {

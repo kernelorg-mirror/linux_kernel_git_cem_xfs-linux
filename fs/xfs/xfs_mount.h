@@ -472,7 +472,7 @@ static inline bool xfs_has_nonzoned(const struct xfs_mount *mp)
 
 static inline bool xfs_can_sw_atomic_write(struct xfs_mount *mp)
 {
-	return xfs_has_reflink(mp);
+	return xfs_has_reflink(mp) || xfs_has_zoned(mp);
 }
 
 /*
