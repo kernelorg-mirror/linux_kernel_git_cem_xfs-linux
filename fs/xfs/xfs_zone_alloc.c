@@ -223,7 +223,7 @@ xfs_zone_skip_blocks(
 }
 
 static int
-xfs_zoned_map_extent(
+xfs_zoned_map_extent_locked(
 	struct xfs_trans	*tp,
 	struct xfs_inode	*ip,
 	struct xfs_bmbt_irec	*new,
@@ -231,10 +231,10 @@ xfs_zoned_map_extent(
 	xfs_fsblock_t		old_startblock)
 {
 	struct xfs_bmbt_irec	data;
-	struct xfs_rtgroup	*rtg = oz->oz_rtg;
-	struct xfs_inode	*rmapip = rtg_rmap(rtg);
 	int			nmaps = 1;
 	int			error;
+
+	xfs_assert_ilocked(ip, XFS_ILOCK_EXCL);
 
 	/* Grab the corresponding mapping in the data fork. */
 	error = xfs_bmapi_read(ip, new->br_startoff, new->br_blockcount, &data,
@@ -263,8 +263,11 @@ xfs_zoned_map_extent(
 	 * finished and these blocks will be moved out eventually.
 	 */
 	if (old_startblock != NULLFSBLOCK &&
-	    old_startblock != data.br_startblock)
-		goto skip;
+	    old_startblock != data.br_startblock) {
+		trace_xfs_reflink_cow_remap_skip(ip, new);
+		xfs_zone_skip_blocks(oz, new->br_blockcount);
+		return -EAGAIN;
+	}
 
 	trace_xfs_reflink_cow_remap_from(ip, new);
 	trace_xfs_reflink_cow_remap_to(ip, &data);
@@ -290,6 +293,27 @@ xfs_zoned_map_extent(
 				return error;
 		}
 	}
+	return 0;
+}
+
+static int
+xfs_zoned_map_extent(
+	struct xfs_trans	*tp,
+	struct xfs_inode	*ip,
+	struct xfs_bmbt_irec	*new,
+	struct xfs_open_zone	*oz,
+	xfs_fsblock_t		old_startblock)
+{
+	struct xfs_rtgroup	*rtg = oz->oz_rtg;
+	struct xfs_inode	*rmapip = rtg_rmap(rtg);
+	int			error;
+
+	error = xfs_zoned_map_extent_locked(tp, ip, new, oz, old_startblock);
+
+	/* We might have raced with the GC write, so skip this mapping */
+	if (error)
+		return (error == -EAGAIN) ? 0 : error;
+
 
 	xfs_rtgroup_lock(rtg, XFS_RTGLOCK_RMAP);
 	xfs_rtgroup_trans_join(tp, rtg, XFS_RTGLOCK_RMAP);
@@ -300,11 +324,7 @@ xfs_zoned_map_extent(
 
 	/* Map the new blocks into the data fork. */
 	xfs_bmap_map_extent(tp, ip, XFS_DATA_FORK, new);
-	return 0;
 
-skip:
-	trace_xfs_reflink_cow_remap_skip(ip, new);
-	xfs_zone_skip_blocks(oz, new->br_blockcount);
 	return 0;
 }
 
