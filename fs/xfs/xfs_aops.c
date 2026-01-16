@@ -150,9 +150,16 @@ xfs_end_ioend(
 	/*
 	 * Success: commit the COW or unwritten blocks if needed.
 	 */
-	if (is_zoned)
-		error = xfs_zoned_end_io(ip, offset, size, ioend->io_sector,
-				ioend->io_private, NULLFSBLOCK);
+	if (is_zoned) {
+		if (ioend->io_flags & IOMAP_IOEND_ATOMIC)
+			error = xfs_zoned_atomic_end_io(ip, offset, size,
+					ioend->io_sector, ioend->io_private,
+					NULLFSBLOCK);
+		else
+			error = xfs_zoned_end_io(ip, offset, size,
+					ioend->io_sector, ioend->io_private,
+					NULLFSBLOCK);
+	}
 	else if (ioend->io_flags & IOMAP_IOEND_SHARED)
 		error = xfs_reflink_end_cow(ip, offset, size);
 	else if (ioend->io_flags & IOMAP_IOEND_UNWRITTEN)

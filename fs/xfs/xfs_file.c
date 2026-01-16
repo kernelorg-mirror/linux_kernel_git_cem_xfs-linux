@@ -681,6 +681,7 @@ xfs_dio_zoned_submit_io(
 	struct xfs_zone_alloc_ctx *ac = iter->private;
 	xfs_filblks_t		count_fsb;
 	struct iomap_ioend	*ioend;
+	u16			ioend_flags = IOMAP_IOEND_DIRECT;
 
 	count_fsb = XFS_B_TO_FSB(mp, bio->bi_iter.bi_size);
 	if (count_fsb > ac->reserved_blocks) {
@@ -693,9 +694,11 @@ xfs_dio_zoned_submit_io(
 	}
 	ac->reserved_blocks -= count_fsb;
 
+	if (iter->flags & IOMAP_ATOMIC)
+		ioend_flags |= IOMAP_IOEND_ATOMIC;
+
 	bio->bi_end_io = xfs_end_bio;
-	ioend = iomap_init_ioend(iter->inode, bio, file_offset,
-			IOMAP_IOEND_DIRECT);
+	ioend = iomap_init_ioend(iter->inode, bio, file_offset, ioend_flags);
 	xfs_zone_alloc_and_submit(ioend, &ac->open_zone);
 }
 

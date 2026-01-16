@@ -329,6 +329,77 @@ xfs_zoned_map_extent(
 }
 
 int
+xfs_zoned_atomic_end_io(
+	struct xfs_inode	*ip,
+	xfs_off_t		offset,
+	xfs_off_t		count,
+	xfs_daddr_t		daddr,
+	struct xfs_open_zone	*oz,
+	xfs_fsblock_t		old_startblock)
+{
+	struct xfs_mount	*mp = ip->i_mount;
+	xfs_fileoff_t		end_fsb = XFS_B_TO_FSB(mp, offset + count);
+	struct xfs_bmbt_irec	new = {
+		.br_startoff	= XFS_B_TO_FSBT(mp, offset),
+		.br_startblock	= xfs_daddr_to_rtb(mp, daddr),
+		.br_state	= XFS_EXT_NORM,
+	};
+	struct xfs_rtgroup	*rtg = oz->oz_rtg;
+	struct xfs_inode	*rmapip = rtg_rmap(rtg);
+	unsigned int		resblks;
+	struct xfs_trans	*tp;
+	int			error = 0;
+
+	if (xfs_is_shutdown(mp))
+		return -EIO;
+
+	resblks = (end_fsb - new.br_startoff) *
+		XFS_EXTENTADD_SPACE_RES(mp, XFS_DATA_FORK);
+
+	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, resblks, 0,
+			XFS_TRANS_RESERVE | XFS_TRANS_RES_FDBLKS, &tp);
+	if (error)
+		return error;
+
+	xfs_ilock(ip, XFS_ILOCK_EXCL);
+	xfs_trans_ijoin(tp, ip, 0);
+	xfs_rtgroup_lock(rtg, XFS_RTGLOCK_RMAP);
+	xfs_rtgroup_trans_join(tp, rtg, XFS_RTGLOCK_RMAP);
+
+	while (new.br_startoff < end_fsb) {
+		new.br_blockcount = end_fsb - new.br_startoff;
+
+		error = xfs_zoned_map_extent_locked(tp, ip, &new, oz,
+						    old_startblock);
+		if (error) {
+			if (error == -EAGAIN)
+				continue;
+			else
+				goto out_err;
+		}
+
+		rmapip->i_used_blocks += new.br_blockcount;
+		ASSERT(rmapip->i_used_blocks <= rtg_blocks(rtg));
+		xfs_zone_inc_written(oz, new.br_blockcount);
+		xfs_trans_log_inode(tp, rmapip, XFS_ILOG_CORE);
+
+		/* Map the new blocks into the data fork. */
+		xfs_bmap_map_extent(tp, ip, XFS_DATA_FORK, &new);
+
+		new.br_startoff += new.br_blockcount;
+		new.br_startblock += new.br_blockcount;
+		if (old_startblock != NULLFSBLOCK)
+			old_startblock += new.br_blockcount;
+	}
+
+	error = xfs_trans_commit(tp);
+
+out_err:
+	xfs_iunlock(ip, XFS_ILOCK_EXCL);
+	return error;
+}
+
+int
 xfs_zoned_end_io(
 	struct xfs_inode	*ip,
 	xfs_off_t		offset,
